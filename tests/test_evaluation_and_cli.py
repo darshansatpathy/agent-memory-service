@@ -40,6 +40,7 @@ def test_cli_admin_commands(database_url, monkeypatch, capsys):
 
 @pytest.mark.model
 def test_minilm_understands_paraphrase():
+    pytest.importorskip("torch")
     from memsvc.embed import MiniLM
 
     e = MiniLM().embed(["The user relocated to Porto last spring.", "Which city does the user live in?", "I like strawberry jam."])

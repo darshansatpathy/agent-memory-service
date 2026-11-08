@@ -44,7 +44,7 @@ jobs:
       - run: ruff format --check .
       - run: mypy
       - name: Tests (service, row-level security, TTLs, PII, API) with the hashing embedder
-        run: pytest --cov --cov-report=term-missing --cov-fail-under=85
+        run: pytest -m "not model" --cov --cov-report=term-missing --cov-fail-under=85
 
   evaluate:
     name: Retrieval benchmark with MiniLM
@@ -71,6 +71,10 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: hf-minilm-l6-v2
+      - name: The MiniLM test
+        env:
+          MEMSVC_TEST_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: pytest -m model -q
       - name: Benchmark (fails if hybrid recall or supersession regress)
         run: |
           python bench/evaluate.py --users 30 --scale 20000 --out evaluation.md --min-hit1 0.80 --max-stale 0.0
