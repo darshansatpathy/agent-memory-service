@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, types, tests on PostgreSQL ${{ matrix.pg }} (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {python: "3.11", pg: "16"}
+          - {python: "3.12", pg: "17"}
+          - {python: "3.13", pg: "17"}
+    services:
+      postgres:
+        image: pgvector/pgvector:pg${{ matrix.pg }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 2s --health-retries 30
+    env:
+      MEMSVC_TEST_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+      - name: Tests (service, row-level security, TTLs, PII, API) with the hashing embedder
+        run: pytest --cov --cov-report=term-missing --cov-fail-under=85
+
+  evaluate:
+    name: Retrieval benchmark with MiniLM
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: memory
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 2s --health-retries 30
+    env:
+      MEMSVC_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/memory
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[embed,dev]"
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/huggingface
+          key: hf-minilm-l6-v2
+      - name: Benchmark (fails if hybrid recall or supersession regress)
+        run: |
+          python bench/evaluate.py --users 30 --scale 20000 --out evaluation.md --min-hit1 0.80 --max-stale 0.0
+          cat evaluation.md >> "$GITHUB_STEP_SUMMARY"
+
+  image:
+    name: Container image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t agent-memory-service:ci .
+      - name: Smoke test against PostgreSQL
+        run: |
+          docker network create mem
+          docker run -d --name db --network mem -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=memory pgvector/pgvector:pg17
+          for i in $(seq 1 30); do docker exec db pg_isready -U postgres && break; sleep 1; done
+          sleep 2
+          URL=postgresql://postgres:pw@db:5432/memory
+          docker run --rm --network mem -e MEMSVC_DATABASE_URL=$URL agent-memory-service:ci migrate
+          docker run --rm --network mem -e MEMSVC_DATABASE_URL=$URL agent-memory-service:ci create-tenant acme
+          KEY=$(docker run --rm --network mem -e MEMSVC_DATABASE_URL=$URL agent-memory-service:ci create-key acme)
+          docker run -d --name svc --network mem -p 8080:8080 -e MEMSVC_DATABASE_URL=$URL agent-memory-service:ci
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/readyz && break; sleep 1; done
+          curl -sf -X POST http://127.0.0.1:8080/v1/memories -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
+            -d '{"namespace":"u1","kind":"semantic","content":"The user lives in Porto","subject":"user.city"}'
+          curl -sf -X POST http://127.0.0.1:8080/v1/recall -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
+            -d '{"namespace":"u1","query":"which city is the user in"}' | grep -q Porto
+          test "$(docker exec svc id -u)" = 10001
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -e . pip-audit
+      - run: pip-audit --skip-editable

@@ -1,0 +1,28 @@
+# Local stack: PostgreSQL with pgvector, a one-off migration, and the service.
+#   docker compose up -d && docker compose run --rm memsvc create-tenant acme && docker compose run --rm memsvc create-key acme
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_PASSWORD: memory
+      POSTGRES_DB: memory
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      retries: 30
+    volumes: [pg:/var/lib/postgresql/data]
+  migrate:
+    build: .
+    command: ["migrate"]
+    environment: &env
+      MEMSVC_DATABASE_URL: postgresql://postgres:memory@db:5432/memory
+    depends_on:
+      db: {condition: service_healthy}
+  memsvc:
+    build: .
+    environment: *env
+    ports: ["8080:8080"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+volumes:
+  pg:
