@@ -8,6 +8,9 @@
 
 Long-term memory for agents on PostgreSQL and pgvector: **episodes that fade, facts that change, personal data that never gets stored, and tenants that cannot see each other**.
 
+> Reference implementation built on synthetic or public data. It distils patterns from production
+> work into code you can run and read; it is not a client system.
+
 Most agent memory is an append-only pile of text chunks ranked by similarity. That breaks in predictable ways: the user moved, and the agent still "remembers" the old city; a phone number said once is now in every backup and embedding; a missing `where` clause shows one customer's users to another. This service is built around those failures.
 
 From [`docs/evaluation.md`](docs/evaluation.md): 30 simulated users, 481 memories, 420 questions each worded differently from the memory it should find, MiniLM embeddings, PostgreSQL 17 with pgvector.
