@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
-FROM python:3.13-slim AS build
+FROM python:3.15-slim AS build
 WORKDIR /src
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir build && python -m build --wheel --outdir /dist
 
-FROM python:3.13-slim
+FROM python:3.15-slim
 RUN useradd --system --uid 10001 --home /app memsvc && mkdir -p /app /models && chown memsvc /models
 COPY --from=build /dist /dist
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
